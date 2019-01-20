@@ -9,12 +9,55 @@
 import UIKit
 import ARKit
 
+class SliderStack: UIStackView {
+    var slider: UISlider = UISlider()
+    
+    var label: UILabel = UILabel(frame: CGRect(x: 0, y: 0, width: 50, height: 30))
+    
+    var labelText: String!
+    
+    var valueChanged: ((_ value: Float) -> ())?
+    
+    convenience init(labelName: String, minVal: Float = -2, maxVal: Float = 2, defaultVal: Float = 0, valueChanged: @escaping (_ value: Float) -> ()) {
+        self.init()
+        label.text = "\(labelName): \(defaultVal)"
+        label.textColor = .white
+        
+        labelText = labelName
+        
+        slider.minimumValue = minVal
+        slider.maximumValue = maxVal
+        slider.value = defaultVal
+        slider.addTarget(self, action: #selector(sliderValueChanged(sender:)), for: .valueChanged)
+        
+        self.valueChanged = valueChanged
+        
+        addArrangedSubview(label)
+        addArrangedSubview(slider)
+        distribution = .fillEqually
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+    
+    @objc func sliderValueChanged(sender: UISlider) {
+        label.text = "\(labelText!): \(sender.value)"
+        valueChanged?(sender.value)
+    }
+}
+
 class ViewController: UIViewController {
     var sceneView: ARSCNView!
     
     var orientationNumber:UInt32 = 6
     
     let redLayer = CIImage(image: #imageLiteral(resourceName: "red-layer"))
+    
+    var saturation: Float = 0.8
+    
+    var contrast: Float = 1.0
+    
+    var saturationLabel: UILabel = UILabel()
+    
+    var contrastLabel: UILabel = UILabel()
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -29,6 +72,21 @@ class ViewController: UIViewController {
         view.addSubview(sceneView)
         
         NotificationCenter.default.addObserver(self, selector: #selector(onOrientationChange(notification:)), name: UIDevice.orientationDidChangeNotification, object: nil)
+        
+        let saturationStack = SliderStack(labelName: "Saturation", defaultVal: saturation) { (value) in
+            self.saturation = value
+        }
+        let contrastStack = SliderStack(labelName: "Contrast", defaultVal: contrast) { (value) in
+            self.contrast = value
+        }
+        
+        let stackView = UIStackView(arrangedSubviews: [saturationStack, contrastStack])
+        stackView.axis = .vertical
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stackView)
+        stackView.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        stackView.widthAnchor.constraint(equalToConstant: view.frame.width).isActive = true
+        stackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20).isActive = true
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -62,7 +120,6 @@ class ViewController: UIViewController {
         default:
             orientationNumber = 6
         }
-        
     }
 }
 
@@ -82,24 +139,31 @@ extension ViewController: ARSCNViewDelegate {
     }
     
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
-        guard let capturedImage = sceneView.session.currentFrame?.capturedImage else {
+        guard let capturedImage = sceneView.session.currentFrame?.capturedImage,
+            let ciOrientation = CGImagePropertyOrientation(rawValue: orientationNumber) else {
             return
         }
         
         let ciImage = CIImage.init(cvPixelBuffer: capturedImage)
+    
+        let multiplyFilter = CIFilter(name: "CIMultiplyCompositing")
+        multiplyFilter?.setValue(redLayer, forKey: kCIInputImageKey)
+        multiplyFilter?.setValue(ciImage, forKey: kCIInputBackgroundImageKey)
         
-        let filter: CIFilter = CIFilter(name: "CIMultiplyCompositing")!
-        filter.setValue(redLayer, forKey: kCIInputImageKey)
-        filter.setValue(ciImage, forKey: kCIInputBackgroundImageKey)
+        var outputImage = multiplyFilter?.outputImage
         
+        let colorFilter = CIFilter(name: "CIColorControls")
+        colorFilter?.setValue(outputImage, forKey: kCIInputImageKey)
+        colorFilter?.setValue(saturation, forKey: kCIInputSaturationKey)
+        colorFilter?.setValue(contrast, forKey: kCIInputContrastKey)
+
+        outputImage = colorFilter?.outputImage
+    
         let context = CIContext()
         
-        let result = filter.outputImage!.oriented(CGImagePropertyOrientation(rawValue: orientationNumber)!)
-        //let result = filter.outputImage!.applyingFilter("CIFalseColor", parameters: ["inputColor0": CIColor(color: UIColor.red), "inputColor1": CIColor(color: UIColor.clear)]).oriented(CGImagePropertyOrientation(rawValue: orientationNumber)!)
-        
-        if let cgImage = context.createCGImage(result, from: result.extent) {
+        if let outputImage = outputImage?.oriented(ciOrientation),
+            let cgImage = context.createCGImage(outputImage, from: outputImage.extent) {
             sceneView.scene.background.contents = cgImage
         }
-        
     }
 }
